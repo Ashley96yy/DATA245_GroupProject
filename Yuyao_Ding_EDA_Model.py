@@ -25,7 +25,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import joblib
 from IPython.display import display
+from pathlib import Path
 
 from sklearn.base import clone
 from sklearn.compose import ColumnTransformer
@@ -407,6 +409,59 @@ advanced_results_df
 best_pipeline = tuned_rf
 best_predictions = tuned_rf_predictions
 
+# Save the final tuned model for quick demo.
+# Rebuild a fresh tuned pipeline with the final hyperparameters so the
+# preprocessor and fitted model stay aligned when the artifact is reloaded.
+fresh_numeric_transformer = Pipeline([
+    ("imputer", SimpleImputer(strategy="median")),
+])
+
+fresh_categorical_transformer = Pipeline([
+    ("imputer", SimpleImputer(strategy="most_frequent")),
+    ("encoder", OneHotEncoder(handle_unknown="ignore")),
+])
+
+fresh_preprocessor = ColumnTransformer([
+    ("num", fresh_numeric_transformer, numeric_features),
+    ("cat", fresh_categorical_transformer, categorical_features),
+])
+
+final_saved_pipeline = Pipeline([
+    ("preprocessor", fresh_preprocessor),
+    ("model", RandomForestRegressor(
+        n_estimators=400,
+        min_samples_leaf=2,
+        random_state=42,
+        n_jobs=-1,
+    )),
+])
+
+final_saved_pipeline.fit(X_train, y_train)
+
+train_feature_count = final_saved_pipeline.named_steps["preprocessor"].transform(X_train.iloc[[0]]).shape[1]
+test_feature_count = final_saved_pipeline.named_steps["preprocessor"].transform(X_test.iloc[[0]]).shape[1]
+model_feature_count = final_saved_pipeline.named_steps["model"].n_features_in_
+
+print(f"Train transformed features: {train_feature_count}")
+print(f"Test transformed features: {test_feature_count}")
+print(f"Model expects features: {model_feature_count}")
+
+quick_pred_before_save = final_saved_pipeline.predict(X_test.iloc[[0]])[0]
+print(f"Quick prediction before save: {quick_pred_before_save:.2f}")
+print(f"Actual value: {y_test.iloc[0]:.2f}")
+
+model_path = "yuyao_tuned_rf_pipeline.pkl"
+joblib.dump(final_saved_pipeline, model_path, compress=3)
+
+demo_model = joblib.load(model_path)
+demo_pred = demo_model.predict(X_test.iloc[[0]].copy())[0]
+size_mb = Path(model_path).stat().st_size / (1024 * 1024)
+
+print(f"Saved model to: {model_path}")
+print(f"File size: {size_mb:.2f} MB")
+print("Reload success:", type(demo_model))
+print(f"Demo prediction: {demo_pred:.2f}")
+
 comparison_df = pd.DataFrame({
     "actual": y_test,
     "predicted": best_predictions,
@@ -709,7 +764,6 @@ for line in summary_lines:
 
 
 # In[ ]:
-
 
 
 

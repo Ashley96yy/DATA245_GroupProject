@@ -2,7 +2,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import joblib
 from IPython.display import display
+from pathlib import Path
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score, adjusted_rand_score
 from sklearn.preprocessing import StandardScaler
@@ -274,6 +276,49 @@ work["cluster_name"] = work["cluster"].map(cluster_names)
 cluster_summary["cluster_name"] = cluster_summary["cluster"].map(cluster_names)
 
 cluster_summary
+
+# Save the final clustering artifact for quick demo.
+energy_lower = work[col_energy].quantile(0.01)
+energy_upper = work[col_energy].quantile(0.99)
+water_lower = work["water_intensity"].quantile(0.01)
+water_upper = work["water_intensity"].quantile(0.99)
+
+cluster_artifact = {
+    "model": final_km,
+    "scaler": scaler,
+    "final_k": final_k,
+    "energy_lower": energy_lower,
+    "energy_upper": energy_upper,
+    "water_lower": water_lower,
+    "water_upper": water_upper,
+    "feature_names": ["energy_wins", "log_water_intensity"],
+    "cluster_names": cluster_names,
+}
+
+model_path = "chao_kmeans_cluster_artifact.pkl"
+joblib.dump(cluster_artifact, model_path, compress=3)
+
+loaded_artifact = joblib.load(model_path)
+size_mb = Path(model_path).stat().st_size / (1024 * 1024)
+
+sample_row = work.iloc[[0]].copy()
+sample_energy = sample_row[col_energy].clip(lower=energy_lower, upper=energy_upper)
+sample_water_intensity = (sample_row[col_water] / sample_row[col_gfa]).clip(lower=water_lower, upper=water_upper)
+sample_log_water = np.log1p(sample_water_intensity)
+
+sample_features = pd.DataFrame({
+    "energy_wins": sample_energy.values,
+    "log_water_intensity": sample_log_water.values
+})
+
+sample_scaled = loaded_artifact["scaler"].transform(sample_features)
+sample_cluster = loaded_artifact["model"].predict(sample_scaled)[0]
+
+print("Reload success:", type(loaded_artifact))
+print(f"File size: {size_mb:.2f} MB")
+print("Saved keys:", list(loaded_artifact.keys()))
+print("Demo cluster assignment:", sample_cluster)
+print("Cluster name:", loaded_artifact["cluster_names"].get(sample_cluster, "Unknown"))
 
 plt.figure(figsize=(7, 5))
 sc = plt.scatter(

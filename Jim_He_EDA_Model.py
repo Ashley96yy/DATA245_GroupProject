@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import re
+import joblib
 from pathlib import Path
 
 from IPython.display import display
@@ -506,6 +507,19 @@ print(random_search.best_params_)
 print()
 comparison_df
 
+# Save the final tuned model for quick demo.
+model_path = "jim_tuned_rf_pipeline.pkl"
+joblib.dump(tuned_pipeline, model_path, compress=3)
+
+demo_model = joblib.load(model_path)
+demo_pred = demo_model.predict(X_test.iloc[[0]].copy())[0]
+size_mb = Path(model_path).stat().st_size / (1024 * 1024)
+
+print("Reload success:", type(demo_model))
+print(f"File size: {size_mb:.2f} MB")
+print(f"Demo prediction: {demo_pred:.2f}")
+print(f"Actual value: {y_test.iloc[0]:.2f}")
+
 
 # In[14]:
 
@@ -522,4 +536,3 @@ plot_actual_vs_predicted(
 
 importance_df = summarize_feature_importance(tuned_pipeline)
 importance_df.head(20)
-

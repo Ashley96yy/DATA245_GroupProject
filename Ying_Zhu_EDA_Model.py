@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 import math
+import joblib
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyRegressor
@@ -21,6 +22,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.model_selection import RandomizedSearchCV
 from IPython.display import display
+from pathlib import Path
 
 file_path = "NYC_Building_Energy_and_Water_Data_Disclosure_shared_cleaned.csv"
 df1 = pd.read_csv(file_path, low_memory=False)
@@ -579,6 +581,19 @@ rf_comparison_df = pd.DataFrame([
 ])
 
 rf_comparison_df
+
+# Save the final tuned model for quick demo.
+model_path = "ying_tuned_rf_pipeline.pkl"
+joblib.dump(best_rf_tuned, model_path, compress=3)
+
+demo_model = joblib.load(model_path)
+demo_pred = demo_model.predict(X_test.iloc[[0]].copy())[0]
+size_mb = Path(model_path).stat().st_size / (1024 * 1024)
+
+print("Reload success:", type(demo_model))
+print(f"File size: {size_mb:.2f} MB")
+print(f"Demo prediction: {demo_pred:.2f}")
+print(f"Actual value: {y_test.iloc[0]:.2f}")
 
 
 plt.figure(figsize=(6, 6))

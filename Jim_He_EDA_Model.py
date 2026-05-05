@@ -18,6 +18,7 @@ from __future__ import annotations
 
 # %% Cell 2
 
+import json
 import re
 from pathlib import Path
 
@@ -1201,6 +1202,53 @@ def plot_prediction_grid(y_true, prediction_map, title_prefix: str, ncols: int =
     plt.show()
 
 
+def plot_prediction_grid_with_metrics(
+    evaluation: dict,
+    model_names: list[str],
+    title_prefix: str,
+    ncols: int = 2,
+    upper_quantile: float = 0.995,
+    alpha: float = 0.06,
+    s: int = 7,
+) -> None:
+    """Actual-vs-predicted grid with holdout metrics in the panel titles."""
+
+    available_names = [name for name in model_names if name in evaluation["artifacts"]]
+    if not available_names:
+        raise ValueError("None of the requested models are available in this evaluation.")
+
+    y_true_arr = np.asarray(evaluation["y_test"], dtype=float)
+    metrics_lookup = evaluation["results_df"].set_index("Model")
+    nrows = int(np.ceil(len(available_names) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4.9 * nrows))
+    axes = np.atleast_1d(axes).ravel()
+
+    for ax, name in zip(axes, available_names):
+        y_pred = np.asarray(evaluation["artifacts"][name].predictions, dtype=float)
+        upper = max(
+            float(np.quantile(y_true_arr, upper_quantile)),
+            float(np.quantile(y_pred, upper_quantile)),
+        )
+        metric_row = metrics_lookup.loc[name]
+        ax.scatter(y_true_arr, y_pred, alpha=alpha, s=s)
+        ax.plot([0.0, upper], [0.0, upper], color="red", linewidth=2, linestyle="--")
+        ax.set_xlim(0.0, upper)
+        ax.set_ylim(0.0, upper)
+        ax.set_title(
+            f"{title_prefix}: {name}\n"
+            f"RMSE={metric_row['RMSE']:.3f}, R²={metric_row['R2']:.3f}"
+        )
+        ax.set_xlabel("Actual GHG intensity")
+        ax.set_ylabel("Predicted GHG intensity")
+        ax.grid(alpha=0.3)
+
+    for ax in axes[len(available_names):]:
+        ax.axis("off")
+
+    plt.tight_layout()
+    plt.show()
+
+
 def plot_model_diagnostics(evaluation: dict, model_name: str, title_prefix: str) -> None:
     predictions = evaluation["artifacts"][model_name].predictions
     plot_actual_vs_predicted_quantile(
@@ -1478,20 +1526,58 @@ fuel_derived_prediction_map = {
 }
 
 # %% [markdown] Cell 16
-# ### Forecasting Comparison Plots
+# ### Forecasting Comparison: Model Walkthrough
 #
-# Each point is one building in the `2024` year holdout. The red dashed line is the ideal `predicted = actual` line.
+# This section is the main visual explanation for the **forecasting** track. The models only use metadata and property-type features, so this is the harder and more defensible version of the problem.
 #
-# - A tighter diagonal cloud means the model is capturing the target well.
-# - Horizontal banding means the model is collapsing many buildings to similar predictions.
-# - This section uses the **forecasting** track, so the models only see metadata and property-type information.
-# - It also includes a tuned random forest to compare against the untuned forecasting RF.
+# Read the section in this order:
+#
+# 1. The table ranks forecasting models by `RMSE` on the 2024 holdout.
+# 2. The first plot compares the baseline, linear model, selected random forest, and tuned random forest. `Ridge` is omitted from the plot because it behaves almost the same as `LinearRegression`.
+# 3. The second plot isolates the untuned vs tuned random forest. The tuned version is shown as a tuning check, but it is not selected because it generalizes worse to 2024.
+#
+# The red dashed line is perfect prediction. Points below the line are underpredictions; points above the line are overpredictions.
 
 # %% Cell 17
-plot_prediction_grid(
-    year_evaluations["forecasting_strict"]["y_test"],
-    forecasting_prediction_map,
-    title_prefix="Year Holdout Forecasting",
+forecasting_results_for_walkthrough = (
+    year_evaluations["forecasting_strict"]["results_df"]
+    .loc[:, ["Model", "MAE", "RMSE", "R2", "Pred 99.5%", "Pred Max"]]
+    .assign(Selected=lambda frame: frame["Model"].eq(best_forecasting_model_name))
+    .sort_values(["RMSE", "MAE"])
+    .reset_index(drop=True)
+)
+
+display(forecasting_results_for_walkthrough.round(4))
+
+untuned_rf_row = forecasting_results_for_walkthrough.loc[
+    forecasting_results_for_walkthrough["Model"] == "RandomForestRegressor (Raw)"
+].iloc[0]
+tuned_rf_row = forecasting_results_for_walkthrough.loc[
+    forecasting_results_for_walkthrough["Model"] == "TunedRandomForestRegressor (Forecasting)"
+].iloc[0]
+tuned_rmse_delta = tuned_rf_row["RMSE"] - untuned_rf_row["RMSE"]
+print(
+    f"Tuned RF RMSE is {tuned_rmse_delta:.4f} higher than the untuned RF "
+    f"on the 2024 holdout, so the untuned RF remains the selected forecasting model."
+)
+
+forecasting_walkthrough_models = [
+    "PropertyTypeMeanBaseline",
+    "LinearRegression (Raw)",
+    "RandomForestRegressor (Raw)",
+    "TunedRandomForestRegressor (Forecasting)",
+]
+plot_prediction_grid_with_metrics(
+    year_evaluations["forecasting_strict"],
+    forecasting_walkthrough_models,
+    title_prefix="Forecasting",
+    ncols=2,
+)
+
+plot_prediction_grid_with_metrics(
+    year_evaluations["forecasting_strict"],
+    ["RandomForestRegressor (Raw)", "TunedRandomForestRegressor (Forecasting)"],
+    title_prefix="RF tuning check",
     ncols=2,
 )
 
@@ -1712,3 +1798,95 @@ print(
     "Conclusion: the notebook now addresses both tasks, but the highest scores come from the estimation/imputation track. "
     "The forecasting track is the more defensible answer to whether building characteristics alone can predict GHG intensity."
 )
+
+# %% [markdown] Cell 36
+# ## Saved Forecasting Model Artifact
+#
+# This section saves the best year-holdout forecasting pipeline to `jim_tuned_rf_pipeline.pkl`, matching the saved-model convention used by the Streamlit demo. The pickle stores the fitted preprocessing pipeline and model directly, while a small JSON sidecar records the metrics and feature columns.
+
+# %% Cell 37
+JIM_FORECAST_MODEL_PATH = Path("jim_tuned_rf_pipeline.pkl")
+JIM_FORECAST_METADATA_PATH = Path("jim_tuned_rf_pipeline_metadata.json")
+
+
+def save_pipeline_pickle(model, path: Path) -> Path:
+    """Save fitted sklearn pipelines, including notebook-defined transformers."""
+
+    path = Path(path)
+    try:
+        import cloudpickle
+
+        with path.open("wb") as file:
+            cloudpickle.dump(model, file)
+    except ImportError:
+        import joblib
+
+        joblib.dump(model, path, compress=3)
+    return path
+
+
+def load_pipeline_pickle(path: Path):
+    """Load the saved pipeline artifact for a quick smoke test or demo use."""
+
+    import joblib
+
+    return joblib.load(Path(path))
+
+
+def build_forecast_artifact_metadata() -> dict:
+    return {
+        "model_name": best_forecasting_model_name,
+        "scenario": "forecasting_strict",
+        "scenario_label": SCENARIO_LABELS["forecasting_strict"],
+        "target": TARGET,
+        "holdout_year": int(PRIMARY_HOLDOUT_YEAR),
+        "feature_columns": list(year_evaluations["forecasting_strict"]["feature_columns"]),
+        "numeric_features": list(feature_scenarios["forecasting_strict"]["numeric"]),
+        "categorical_features": list(feature_scenarios["forecasting_strict"]["categorical"]),
+        "scope_upper": float(year_evaluations["forecasting_strict"]["scope_upper"]),
+        "train_rows": int(len(year_evaluations["forecasting_strict"]["X_train"])),
+        "test_rows": int(len(year_evaluations["forecasting_strict"]["X_test"])),
+        "metrics": {
+            "MAE": float(best_forecasting_row["MAE"]),
+            "RMSE": float(best_forecasting_row["RMSE"]),
+            "R2": float(best_forecasting_row["R2"]),
+            "Pred Min": float(best_forecasting_row["Pred Min"]),
+            "Pred 99.5%": float(best_forecasting_row["Pred 99.5%"]),
+            "Pred Max": float(best_forecasting_row["Pred Max"]),
+        },
+    }
+
+
+def export_best_forecast_pipeline(
+    model_path: Path = JIM_FORECAST_MODEL_PATH,
+    metadata_path: Path = JIM_FORECAST_METADATA_PATH,
+) -> tuple[Path, Path, dict]:
+    metadata = build_forecast_artifact_metadata()
+    save_pipeline_pickle(best_forecasting_artifact.model, model_path)
+    Path(metadata_path).write_text(json.dumps(metadata, indent=2))
+    return Path(model_path), Path(metadata_path), metadata
+
+
+def build_sample_forecast_input() -> pd.DataFrame:
+    return pd.DataFrame([
+        {
+            "Calendar Year": PRIMARY_HOLDOUT_YEAR,
+            "Year Built": 1980,
+            "Number of Buildings": 1,
+            "Occupancy": 95.0,
+            "Model GFA (ft²)": 50000.0,
+            "Largest Use Share of GFA": 0.9,
+            "Property Type for Modeling": "Multifamily Housing",
+        }
+    ])
+
+
+forecast_model_path, forecast_metadata_path, forecast_metadata = export_best_forecast_pipeline()
+loaded_forecast_model = load_pipeline_pickle(forecast_model_path)
+sample_forecast_input = build_sample_forecast_input()
+sample_forecast_prediction = float(loaded_forecast_model.predict(sample_forecast_input)[0])
+
+print(f"Saved forecasting model pipeline to: {forecast_model_path}")
+print(f"Saved forecasting model metadata to: {forecast_metadata_path}")
+print(f"Loaded model smoke-test prediction: {sample_forecast_prediction:.2f} kgCO2e/ft²")
+display(pd.DataFrame([forecast_metadata["metrics"]]))

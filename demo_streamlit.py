@@ -109,66 +109,28 @@ def chao_demo():
 def jim_demo():
     model = load_artifact("jim_tuned_rf_pipeline.pkl")
     st.header("Jim He: GHG Emissions Intensity Prediction")
-    st.caption("Saved tuned random forest pipeline")
+    st.caption("Saved forecasting random forest pipeline. This demo excludes fuel-derived intensity variables.")
 
+    calendar_year = st.number_input("Calendar Year", min_value=2022, max_value=2026, value=2024, step=1, key="jim_calendar_year")
     year_built = st.number_input("Year Built", min_value=1800, max_value=2026, value=1980, step=1, key="jim_year")
     number_of_buildings = st.number_input("Number of Buildings", min_value=1, value=1, step=1, key="jim_buildings")
     occupancy = st.number_input("Occupancy", min_value=0.0, max_value=100.0, value=95.0, step=1.0, key="jim_occupancy")
     model_gfa = st.number_input("Model GFA (ft²)", min_value=1.0, value=50000.0, step=1000.0, key="jim_gfa")
-    total_fuel = st.number_input("Total Fuel Use (kBtu)", min_value=1.0, value=4250000.0, step=50000.0, key="jim_fuel")
-    electricity_share = st.slider("Electricity Share", min_value=0.0, max_value=1.0, value=0.65, step=0.05)
-    natural_gas_share = st.slider("Natural Gas Share", min_value=0.0, max_value=1.0, value=0.35, step=0.05)
-    property_type = st.selectbox(
-        "Primary Property Type - Self Selected",
+    largest_use_share = st.slider("Largest Use Share of GFA", min_value=0.0, max_value=1.0, value=0.9, step=0.05)
+    property_type_for_modeling = st.selectbox(
+        "Property Type for Modeling",
         ["Multifamily Housing", "Office", "Hotel", "K-12 School", "Retail Store", "Non-Refrigerated Warehouse"],
         key="jim_property_type",
     )
-    largest_use_type = st.selectbox(
-        "Largest Property Use Type",
-        ["Multifamily Housing", "Office", "Hotel", "K-12 School", "Retail Store", "Non-Refrigerated Warehouse"],
-        key="jim_largest_use_type",
-    )
-    city = st.selectbox("City", ["New York", "Brooklyn", "Queens", "Bronx", "Staten Island"], key="jim_city")
 
-    fuel_intensity = total_fuel / model_gfa
-    largest_use_share = 0.9
     sample = pd.DataFrame([{
-        "Calendar Year": 2024,
+        "Calendar Year": calendar_year,
         "Year Built": year_built,
         "Number of Buildings": number_of_buildings,
         "Occupancy": occupancy,
         "Model GFA (ft²)": model_gfa,
         "Largest Use Share of GFA": largest_use_share,
-        "Fuel Use Intensity (kBtu/ft²)": fuel_intensity,
-        "Log Model GFA": np.log1p(model_gfa),
-        "Log Total Fuel Use": np.log1p(total_fuel),
-        "Primary Property Type - Self Selected": property_type,
-        "Largest Property Use Type": largest_use_type,
-        "City": city,
-        "electricity_grid_purchase_share": electricity_share,
-        "natural_gas_share": natural_gas_share,
-        "district_steam_share": 0.0,
-        "district_hot_water_share": 0.0,
-        "district_chilled_water_share": 0.0,
-        "fuel_oil_1_share": 0.0,
-        "fuel_oil_2_share": 0.0,
-        "fuel_oil_4_share": 0.0,
-        "fuel_oil_5_6_share": 0.0,
-        "diesel_2_share": 0.0,
-        "propane_share": 0.0,
-        "kerosene_share": 0.0,
-        "electricity_grid_purchase_missing": int(electricity_share == 0),
-        "natural_gas_missing": int(natural_gas_share == 0),
-        "district_steam_missing": 1,
-        "district_hot_water_missing": 1,
-        "district_chilled_water_missing": 1,
-        "fuel_oil_1_missing": 1,
-        "fuel_oil_2_missing": 1,
-        "fuel_oil_4_missing": 1,
-        "fuel_oil_5_6_missing": 1,
-        "diesel_2_missing": 1,
-        "propane_missing": 1,
-        "kerosene_missing": 1,
+        "Property Type for Modeling": property_type_for_modeling,
     }])
     show_sample(sample)
 

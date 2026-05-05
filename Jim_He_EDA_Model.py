@@ -1,22 +1,20 @@
 #!/usr/bin/env python
 # coding: utf-8
-from __future__ import annotations
 
-# Generated from Jim_He_EDA_Model.ipynb.
-# Re-run the notebook for interactive plots and rendered outputs.
-
-
-# %% [markdown] Cell 1
 # # GHG Emissions Intensity Modeling
-#
+# 
 # This notebook now separates two related tasks:
-#
+# 
 # 1. **Forecasting**: predict GHG intensity from building characteristics without fuel-intensity inputs.
 # 2. **Estimation / imputation**: estimate GHG intensity when fuel-derived inputs are available.
-#
+# 
 # The primary headline evaluation uses a **year-based holdout**. A separate **grouped building holdout** is added to avoid putting the same building in both train and test.
+# 
 
-# %% Cell 2
+# In[1]:
+
+
+from __future__ import annotations
 
 import json
 import re
@@ -87,10 +85,12 @@ FUEL_USE_COLUMNS = [
 ]
 
 
-# %% [markdown] Cell 3
+
 # ## Data Loading And Cleaning Helpers
 
-# %% Cell 4
+# In[2]:
+
+
 def make_feature_slug(name: str) -> str:
     slug = name.lower()
     slug = slug.replace("(kbtu)", "")
@@ -166,10 +166,12 @@ def clean_anomalies(df: pd.DataFrame) -> pd.DataFrame:
     cleaned.loc[cleaned[TARGET] <= 0, TARGET] = np.nan
     return cleaned
 
-# %% [markdown] Cell 5
+
 # ## Feature Engineering
 
-# %% Cell 6
+# In[3]:
+
+
 def build_stable_building_id(frame: pd.DataFrame) -> pd.Series:
     stable_id = pd.Series(pd.NA, index=frame.index, dtype="string")
     for col in IDENTIFIER_COLUMNS:
@@ -299,10 +301,12 @@ def plot_target_distribution(model_df: pd.DataFrame) -> None:
     plt.show()
 
 
-# %% [markdown] Cell 7
+
 # ## Evaluation And Diagnostic Helpers
 
-# %% Cell 8
+# In[4]:
+
+
 """Utilities to strengthen the GHG emissions intensity notebook.
 
 This module is designed as a drop-in companion to the notebook. It focuses on:
@@ -1384,10 +1388,13 @@ def run_near_reconstruction_check(
 
 
 
-# %% [markdown] Cell 9
+
 # ## Load, Clean, And Inspect The Modeling Dataset
 
-# %% Cell 10
+# In[5]:
+
+
+DATA_PATH = Path("NYC_Building_Energy_and_Water_Data_Disclosure_shared_cleaned.csv")
 df = load_shared_dataset(DATA_PATH)
 df = clean_anomalies(df)
 df, numeric_features, categorical_features = engineer_features(df)
@@ -1400,15 +1407,21 @@ for name in ["forecasting_strict", "estimation_without_intensities", "fuel_deriv
     spec = feature_scenarios[name]
     print(f"- {name}: {len(spec['numeric'])} numeric, {len(spec['categorical'])} categorical")
 
-# %% Cell 11
+
+# In[6]:
+
+
 plot_target_distribution(model_df)
 
-# %% [markdown] Cell 12
-# ## Primary Evaluation: Year-Based Holdout
-#
-# The main headline evaluation holds out the most recent year (`2024`) as the test set. All models are trained and evaluated on the **raw target scale** only. The forecasting track also includes a tuned random forest so the tuned and untuned versions can be compared directly.
 
-# %% Cell 13
+# ## Primary Evaluation: Year-Based Holdout
+# 
+# The main headline evaluation holds out the most recent year (`2024`) as the test set. All models are trained and evaluated on the **raw target scale** only. The forecasting track also includes a tuned random forest so the tuned and untuned versions can be compared directly.
+# 
+
+# In[7]:
+
+
 scenario_order = [
     "forecasting_strict",
     "estimation_without_intensities",
@@ -1505,12 +1518,15 @@ display(best_estimation_row.to_frame().T)
 
 
 
-# %% [markdown] Cell 14
-# ### Plot Setup
-#
-# The next cells separate the year-holdout plots into smaller blocks so the forecasting, fuel-derived-only, and estimation views can be interpreted independently.
 
-# %% Cell 15
+# ### Plot Setup
+# 
+# The next cells separate the year-holdout plots into smaller blocks so the forecasting, fuel-derived-only, and estimation views can be interpreted independently.
+# 
+
+# In[8]:
+
+
 forecasting_prediction_map = {
     name: artifact.predictions
     for name, artifact in year_evaluations["forecasting_strict"]["artifacts"].items()
@@ -1525,20 +1541,86 @@ fuel_derived_prediction_map = {
     for name, artifact in year_evaluations["fuel_derived_only"]["artifacts"].items()
 }
 
-# %% [markdown] Cell 16
+
+def get_transformed_column_count(evaluation: dict, preferred_model_name: str | None = None) -> int | None:
+    candidate_names = [preferred_model_name, "RandomForestRegressor (Raw)", "LinearRegression (Raw)", "Ridge (Raw)"]
+    for model_name in candidate_names:
+        if not model_name or model_name not in evaluation["artifacts"]:
+            continue
+        fitted_model = evaluation["artifacts"][model_name].model
+        if hasattr(fitted_model, "named_steps") and "preprocessor" in fitted_model.named_steps:
+            transformed = fitted_model.named_steps["preprocessor"].transform(evaluation["X_test"].head(1))
+            return int(transformed.shape[1])
+    return None
+
+
+def build_dataset_count_summary(
+    evaluations: dict,
+    scenario_names: list[str],
+    preferred_model_name: str | None = None,
+) -> pd.DataFrame:
+    rows = []
+    for scenario_name in scenario_names:
+        evaluation = evaluations[scenario_name]
+        scenario_spec = feature_scenarios[scenario_name]
+        transformed_columns = get_transformed_column_count(evaluation, preferred_model_name=preferred_model_name)
+        rows.append(
+            {
+                "Scenario": SCENARIO_LABELS.get(scenario_name, scenario_name),
+                "Split": evaluation["split_kind"],
+                "Train Rows": len(evaluation["X_train"]),
+                "Test Rows": len(evaluation["X_test"]),
+                "Raw Input Columns": len(evaluation["feature_columns"]),
+                "Numeric Columns": len(scenario_spec["numeric"]),
+                "Categorical Columns": len(scenario_spec["categorical"]),
+                "Transformed Model Columns": transformed_columns,
+                "Train Rows Removed By 99% Scope": evaluation.get("train_rows_removed", 0),
+                "Test Rows Removed By 99% Scope": evaluation.get("test_rows_removed", 0),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def display_dataset_count_summary(
+    evaluations: dict,
+    scenario_names: list[str],
+    title: str,
+    preferred_model_name: str | None = None,
+) -> pd.DataFrame:
+    print(title)
+    summary = build_dataset_count_summary(
+        evaluations,
+        scenario_names,
+        preferred_model_name=preferred_model_name,
+    )
+    display(summary)
+    print()
+    return summary
+
+
 # ### Forecasting Comparison: Model Walkthrough
-#
+# 
 # This section is the main visual explanation for the **forecasting** track. The models only use metadata and property-type features, so this is the harder and more defensible version of the problem.
-#
+# 
 # Read the section in this order:
-#
+# 
 # 1. The table ranks forecasting models by `RMSE` on the 2024 holdout.
 # 2. The first plot compares the baseline, linear model, selected random forest, and tuned random forest. `Ridge` is omitted from the plot because it behaves almost the same as `LinearRegression`.
 # 3. The second plot isolates the untuned vs tuned random forest. The tuned version is shown as a tuning check, but it is not selected because it generalizes worse to 2024.
-#
+# 
 # The red dashed line is perfect prediction. Points below the line are underpredictions; points above the line are overpredictions.
+# 
 
-# %% Cell 17
+# In[9]:
+
+
+display_dataset_count_summary(
+    year_evaluations,
+    ["forecasting_strict"],
+    "Forecasting walkthrough dataset count:",
+    preferred_model_name="RandomForestRegressor (Raw)",
+)
+
 forecasting_results_for_walkthrough = (
     year_evaluations["forecasting_strict"]["results_df"]
     .loc[:, ["Model", "MAE", "RMSE", "R2", "Pred 99.5%", "Pred Max"]]
@@ -1581,15 +1663,25 @@ plot_prediction_grid_with_metrics(
     ncols=2,
 )
 
-# %% [markdown] Cell 18
+
 # ### Estimation Comparison Plots
-#
+# 
 # These plots use the **estimation / imputation** track, which includes fuel-derived features. That makes the problem easier, so stronger diagonal alignment is expected.
-#
+# 
 # - If these plots are much tighter than the forecasting plots, the notebook is showing that fuel-use variables carry most of the predictive signal.
 # - This is the visual counterpart to the feature ablation and near-reconstruction checks.
+# 
 
-# %% Cell 19
+# In[10]:
+
+
+display_dataset_count_summary(
+    year_evaluations,
+    ["estimation_full"],
+    "Estimation walkthrough dataset count:",
+    preferred_model_name="RandomForestRegressor (Raw)",
+)
+
 plot_prediction_grid(
     year_evaluations["estimation_full"]["y_test"],
     estimation_prediction_map,
@@ -1597,16 +1689,26 @@ plot_prediction_grid(
     ncols=2,
 )
 
-# %% [markdown] Cell 20
+
 # ### Fuel-Derived-Only Comparison Plots
-#
+# 
 # These plots isolate the `fuel_derived_only` scenario, which uses fuel intensities, shares, and missingness flags without the metadata-style building features.
-#
+# 
 # - This section helps show how much predictive signal comes from fuel-derived variables alone.
 # - If these plots are much tighter than the forecasting plots, then the fuel variables are carrying most of the model performance.
 # - Comparing this block against the full estimation block shows whether metadata adds much beyond fuel-derived inputs.
+# 
 
-# %% Cell 21
+# In[11]:
+
+
+display_dataset_count_summary(
+    year_evaluations,
+    ["fuel_derived_only"],
+    "Fuel-derived-only walkthrough dataset count:",
+    preferred_model_name="RandomForestRegressor (Raw)",
+)
+
 plot_prediction_grid(
     year_evaluations["fuel_derived_only"]["y_test"],
     fuel_derived_prediction_map,
@@ -1614,49 +1716,58 @@ plot_prediction_grid(
     ncols=2,
 )
 
-# %% [markdown] Cell 22
+
 # ### Best Forecasting Model Diagnostics
-#
+# 
 # This diagnostic block zooms in on the best forecasting model only.
-#
+# 
 # - `Actual vs Predicted` checks overall calibration.
 # - `Residuals vs Actual` shows whether errors change with target size.
 # - `Residual Distribution` shows whether the model is centered near zero error or systematically biased.
 # - Negative residuals mean the model is **underpredicting**; positive residuals mean it is **overpredicting**.
+# 
 
-# %% Cell 23
+# In[12]:
+
+
 plot_model_diagnostics(
     year_evaluations["forecasting_strict"],
     best_forecasting_model_name,
     title_prefix=f"Year Holdout Forecasting: {best_forecasting_model_name}",
 )
 
-# %% [markdown] Cell 24
+
 # ### Best Estimation Model Diagnostics
-#
+# 
 # This is the same diagnostic view for the best estimation model. Because fuel-derived variables are included, this model should usually fit more tightly, but the residual plots still matter.
-#
+# 
 # - A centered residual histogram suggests low overall bias.
 # - A downward residual trend would mean high-emission buildings are still being underpredicted.
 # - Comparing this block to the forecasting diagnostics shows how much the extra fuel information changes model behavior.
+# 
 
-# %% Cell 25
+# In[13]:
+
+
 plot_model_diagnostics(
     year_evaluations["estimation_full"],
     best_estimation_model_name,
     title_prefix=f"Year Holdout Estimation: {best_estimation_model_name}",
 )
 
-# %% [markdown] Cell 26
+
 # ## Feature-Scenario Ablation And Near-Reconstruction Check
-#
+# 
 # These checks answer the core modeling question directly on the **raw target scale**:
-#
+# 
 # - how much performance comes from building metadata alone?
 # - how much comes from fuel-derived variables?
 # - are the strongest results actually forecasting, or are they closer to emissions reconstruction / imputation?
+# 
 
-# %% Cell 27
+# In[14]:
+
+
 fuel_intensity_features = [col for col in numeric_features if col.endswith("_intensity")]
 reconstruction_results_df, reconstruction_coef_df, reconstruction_models = run_near_reconstruction_check(
     model_df,
@@ -1680,12 +1791,15 @@ plot_actual_vs_predicted_quantile(
     upper_quantile=0.995,
 )
 
-# %% [markdown] Cell 28
-# ## Secondary Stress Test: Grouped Holdout By Building ID
-#
-# This split avoids putting the same building into both train and test, even if the building appears in multiple years.
 
-# %% Cell 29
+# ## Secondary Stress Test: Grouped Holdout By Building ID
+# 
+# This split avoids putting the same building into both train and test, even if the building appears in multiple years.
+# 
+
+# In[15]:
+
+
 group_scenarios = ["forecasting_strict", "estimation_full"]
 group_evaluations = {}
 for scenario_name in group_scenarios:
@@ -1704,6 +1818,13 @@ group_results_df = pd.concat(
 )
 group_results_df["Scenario Label"] = group_results_df["Scenario"].map(SCENARIO_LABELS)
 
+display_dataset_count_summary(
+    group_evaluations,
+    group_scenarios,
+    "Grouped-holdout dataset count:",
+    preferred_model_name="RandomForestRegressor (Raw)",
+)
+
 print("Grouped-holdout results:")
 display(group_results_df)
 print()
@@ -1719,12 +1840,15 @@ best_group_estimation_model_name, best_group_estimation_row, best_group_estimati
 print("Best grouped-holdout estimation model:")
 display(best_group_estimation_row.to_frame().T)
 
-# %% [markdown] Cell 30
-# ## Subgroup Error Tables And Residual Diagnostics
-#
-# The subgroup tables below are based on the **grouped-holdout estimation model**, because that test set spans all years and excludes repeated buildings from train/test overlap.
 
-# %% Cell 31
+# ## Subgroup Error Tables And Residual Diagnostics
+# 
+# The subgroup tables below are based on the **grouped-holdout estimation model**, because that test set spans all years and excludes repeated buildings from train/test overlap.
+# 
+
+# In[16]:
+
+
 group_estimation_frame = build_prediction_frame_for_model(
     group_evaluations["estimation_full"],
     best_group_estimation_model_name,
@@ -1742,12 +1866,15 @@ plot_model_diagnostics(
     title_prefix=f"Grouped Holdout Estimation: {best_group_estimation_model_name}",
 )
 
-# %% [markdown] Cell 32
-# ## Permutation Importance
-#
-# Permutation importance is used as the main interpretation layer because it is robust on this notebook’s large one-hot-expanded feature space and sampled holdout evaluation.
 
-# %% Cell 33
+# ## Permutation Importance
+# 
+# Permutation importance is used as the main interpretation layer because it is robust on this notebook’s large one-hot-expanded feature space and sampled holdout evaluation.
+# 
+
+# In[17]:
+
+
 forecasting_permutation_df = permutation_importance_report(
     best_forecasting_artifact.model,
     year_evaluations["forecasting_strict"]["X_test"],
@@ -1768,10 +1895,62 @@ print()
 print("Top permutation importances: estimation track")
 display(estimation_permutation_df.head(20))
 
-# %% [markdown] Cell 34
+
+# ### Random Forest Decision-Split Example
+# 
+# A random forest is an ensemble of many decision trees, so there is no single global split diagram for the whole model. The plot below shows one tree from the selected forecasting random forest, capped at depth 3 so the decision rules remain readable. Treat this as an example of the model's local split logic, not as the full model explanation.
+# 
+
+# In[20]:
+
+
+from sklearn.tree import plot_tree
+
+
+def get_forecasting_rf_feature_names(fitted_pipeline) -> list[str]:
+    preprocessor = fitted_pipeline.named_steps["preprocessor"]
+
+    numeric_features = list(preprocessor.transformers_[0][2])
+    categorical_features = list(preprocessor.transformers_[1][2]) if len(preprocessor.transformers_) > 1 else []
+
+    categorical_names = []
+    if categorical_features:
+        categorical_pipeline = preprocessor.named_transformers_["cat"]
+        onehot = categorical_pipeline.named_steps["onehot"]
+        for feature_name, categories in zip(categorical_features, onehot.categories_):
+            categorical_names.extend([f"{feature_name}={category}" for category in categories])
+
+    return numeric_features + categorical_names
+
+
+forecasting_rf_pipeline = best_forecasting_artifact.model
+forecasting_rf_model = forecasting_rf_pipeline.named_steps["model"]
+forecasting_feature_names = get_forecasting_rf_feature_names(forecasting_rf_pipeline)
+
+print(f"Random forest trees: {len(forecasting_rf_model.estimators_)}")
+print(f"First tree full depth: {forecasting_rf_model.estimators_[0].tree_.max_depth}")
+print(f"First tree full node count: {forecasting_rf_model.estimators_[0].tree_.node_count}")
+print("Displaying only the first 3 levels to keep the plot readable.")
+
+plt.figure(figsize=(24, 10))
+plot_tree(
+    forecasting_rf_model.estimators_[0],
+    feature_names=forecasting_feature_names,
+    max_depth=3,
+    filled=True,
+    rounded=True,
+    fontsize=8,
+)
+plt.title("Example Decision Splits From One Forecasting Random Forest Tree (Depth Capped at 3)")
+plt.tight_layout()
+plt.show()
+
+
 # ## Is This Notebook Solving Forecasting, Imputation, Or Both?
 
-# %% Cell 35
+# In[18]:
+
+
 scope_summary_df = pd.DataFrame([
     {
         "Track": "Forecasting",
@@ -1799,12 +1978,15 @@ print(
     "The forecasting track is the more defensible answer to whether building characteristics alone can predict GHG intensity."
 )
 
-# %% [markdown] Cell 36
-# ## Saved Forecasting Model Artifact
-#
-# This section saves the best year-holdout forecasting pipeline to `jim_tuned_rf_pipeline.pkl`, matching the saved-model convention used by the Streamlit demo. The pickle stores the fitted preprocessing pipeline and model directly, while a small JSON sidecar records the metrics and feature columns.
 
-# %% Cell 37
+# ## Saved Forecasting Model Artifact
+# 
+# This section saves the best year-holdout forecasting pipeline to `jim_tuned_rf_pipeline.pkl`, matching the saved-model convention used by the Streamlit demo. The pickle stores the fitted preprocessing pipeline and model directly, while a small JSON sidecar records the metrics and feature columns.
+# 
+
+# In[19]:
+
+
 JIM_FORECAST_MODEL_PATH = Path("jim_tuned_rf_pipeline.pkl")
 JIM_FORECAST_METADATA_PATH = Path("jim_tuned_rf_pipeline_metadata.json")
 
@@ -1890,3 +2072,10 @@ print(f"Saved forecasting model pipeline to: {forecast_model_path}")
 print(f"Saved forecasting model metadata to: {forecast_metadata_path}")
 print(f"Loaded model smoke-test prediction: {sample_forecast_prediction:.2f} kgCO2e/ft²")
 display(pd.DataFrame([forecast_metadata["metrics"]]))
+
+
+# In[ ]:
+
+
+
+
